@@ -55,10 +55,10 @@ export async function controlPlayback(
     }
 }
 
-export async function searchTracks(accessToken: string, query: string) {
+export async function searchTracks(accessToken: string, query: string, offset: number = 0, limit: number = 20) {
     try {
         const response = await fetch(
-            `${SPOTIFY_API_BASE}/search?q=${encodeURIComponent(query)}&type=track&limit=10`,
+            `${SPOTIFY_API_BASE}/search?q=${encodeURIComponent(query)}&type=track&limit=${limit}&offset=${offset}`,
             {
                 headers: {
                     Authorization: `Bearer ${accessToken}`,

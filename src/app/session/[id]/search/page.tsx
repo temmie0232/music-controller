@@ -7,43 +7,50 @@ import { useSession } from "next-auth/react"
 import { useState } from "react"
 import { searchTracks, addToQueue } from "@/lib/spotify"
 import { useToast } from "@/hooks/use-toast"
-import { Search, Plus } from "lucide-react"
+import { Search, Plus, Loader2 } from "lucide-react"
 import Image from "next/image"
 import { usePathname } from "next/navigation"
+import type { SpotifyTrack, SpotifySearchResponse } from "@/types/spotify"
 
-interface SearchResult {
-    id: string
-    name: string
-    artist: string
-    album: string
-    albumArt?: string
-    uri: string
+interface SearchState {
+    results: SpotifyTrack[];
+    offset: number;
+    hasMore: boolean;
+    total: number;
 }
 
 export default function SearchPage() {
     const [query, setQuery] = useState("")
-    const [results, setResults] = useState<SearchResult[]>([])
+    const [searchState, setSearchState] = useState<SearchState>({
+        results: [],
+        offset: 0,
+        hasMore: false,
+        total: 0
+    })
     const [isSearching, setIsSearching] = useState(false)
+    const [isLoadingMore, setIsLoadingMore] = useState(false)
     const { data: session } = useSession()
     const { toast } = useToast()
     const pathname = usePathname()
     const sessionId = pathname.split('/')[2]
 
-    const handleSearch = async () => {
+    const handleSearch = async (newSearch: boolean = true) => {
         if (!query.trim() || !session?.accessToken) return
 
-        setIsSearching(true)
+        const searchingState = newSearch ? setIsSearching : setIsLoadingMore
+        searchingState(true)
+
         try {
-            const response = await searchTracks(session.accessToken, query)
-            const tracks = response.tracks.items.map((track: any) => ({
-                id: track.id,
-                name: track.name,
-                artist: track.artists[0].name,
-                album: track.album.name,
-                albumArt: track.album.images[0]?.url,
-                uri: track.uri
+            const offset = newSearch ? 0 : searchState.offset
+            const response = await searchTracks(session.accessToken, query, offset) as SpotifySearchResponse
+
+            const newResults = response.tracks.items
+            setSearchState(prev => ({
+                results: newSearch ? newResults : [...prev.results, ...newResults],
+                offset: offset + newResults.length,
+                hasMore: response.tracks.total > (offset + newResults.length),
+                total: response.tracks.total
             }))
-            setResults(tracks)
         } catch (error) {
             console.error('Search failed:', error)
             toast({
@@ -52,11 +59,15 @@ export default function SearchPage() {
                 variant: "destructive"
             })
         } finally {
-            setIsSearching(false)
+            searchingState(false)
         }
     }
 
-    const handleAddToQueue = async (track: SearchResult) => {
+    const handleLoadMore = () => {
+        handleSearch(false)
+    }
+
+    const handleAddToQueue = async (track: SpotifyTrack) => {
         if (!session?.accessToken) return
 
         try {
@@ -84,53 +95,87 @@ export default function SearchPage() {
                             placeholder="曲名、アーティスト名で検索"
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                            onKeyDown={(e) => e.key === 'Enter' && handleSearch(true)}
                             className="flex-1"
                         />
                         <Button
-                            onClick={handleSearch}
+                            onClick={() => handleSearch(true)}
                             disabled={isSearching}
                         >
-                            <Search className="h-4 w-4" />
+                            {isSearching ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                                <Search className="h-4 w-4" />
+                            )}
                         </Button>
                     </div>
                 </div>
             </div>
 
-            <div className="mt-16 max-w-lg mx-auto p-4"> {/* 検索バーの高さ分のマージン */}
+            <div className="mt-16 max-w-lg mx-auto p-4">
                 <div className="space-y-4">
+                    {searchState.results.length > 0 && (
+                        <div className="text-sm text-muted-foreground text-center">
+                            {searchState.total}件中{searchState.results.length}件を表示
+                        </div>
+                    )}
+
                     {isSearching ? (
                         <div className="text-center py-4">検索中...</div>
-                    ) : results.length > 0 ? (
-                        results.map((track) => (
-                            <div
-                                key={track.id}
-                                className="flex items-center gap-3 p-2 rounded-lg border"
-                            >
-                                {track.albumArt && (
-                                    <Image
-                                        src={track.albumArt}
-                                        alt={track.album}
-                                        width={48}
-                                        height={48}
-                                        className="rounded"
-                                    />
-                                )}
-                                <div className="flex-1 min-w-0">
-                                    <p className="font-medium truncate">{track.name}</p>
-                                    <p className="text-sm text-muted-foreground truncate">
-                                        {track.artist} - {track.album}
-                                    </p>
-                                </div>
-                                <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={() => handleAddToQueue(track)}
-                                >
-                                    <Plus className="h-4 w-4" />
-                                </Button>
+                    ) : searchState.results.length > 0 ? (
+                        <>
+                            <div className="space-y-2">
+                                {searchState.results.map((track) => (
+                                    <div
+                                        key={`${track.id}-${track.uri}`}
+                                        className="flex items-center gap-3 p-2 rounded-lg border"
+                                    >
+                                        {track.album.images[0] && (
+                                            <Image
+                                                src={track.album.images[0].url}
+                                                alt={track.album.name}
+                                                width={48}
+                                                height={48}
+                                                className="rounded"
+                                            />
+                                        )}
+                                        <div className="flex-1 min-w-0">
+                                            <p className="font-medium truncate">{track.name}</p>
+                                            <p className="text-sm text-muted-foreground truncate">
+                                                {track.artists[0].name} - {track.album.name}
+                                            </p>
+                                        </div>
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            onClick={() => handleAddToQueue(track)}
+                                        >
+                                            <Plus className="h-4 w-4" />
+                                        </Button>
+                                    </div>
+                                ))}
                             </div>
-                        ))
+
+                            {searchState.hasMore && (
+                                <div className="pt-4">
+                                    <Button
+                                        variant="outline"
+                                        className="w-full"
+                                        onClick={handleLoadMore}
+                                        disabled={isLoadingMore}
+                                    >
+                                        {isLoadingMore ? (
+                                            <>
+                                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                                読み込み中...
+                                            </>
+                                        ) : (
+                                            'もっと表示'
+                                        )}
+                                    </Button>
+                                </div>
+                            )}
+                        </>
                     ) : query && !isSearching ? (
                         <div className="text-center py-4 text-muted-foreground">
                             検索結果が見つかりませんでした
