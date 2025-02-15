@@ -1,7 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  reactStrictMode: true,
-  swcMinify: true,
-};
+  images: {
+    domains: ['i.scdn.co'], // Spotifyの画像ドメインを許可
+  },
+}
 
-module.exports = nextConfig;
+module.exports = nextConfig

@@ -1,21 +1,31 @@
 'use client'
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Slider } from "@/components/ui/slider"
 import { useToast } from "@/hooks/use-toast"
 import { useSession } from "next-auth/react"
 import { useEffect, useState } from "react"
-import { FaPlay, FaPause, FaStepForward, FaStepBackward } from "react-icons/fa"
+import { FaPlay, FaPause, FaStepForward, FaStepBackward, FaArrowUp, FaArrowDown, FaTrash } from "react-icons/fa"
 import { getCurrentPlayback, controlPlayback } from "@/lib/spotify"
 import type { SpotifyTrack } from "@/types/session"
+import { NavigationBar } from "@/components/navigation-bar"
+import Image from "next/image"
+
+interface QueueItem extends SpotifyTrack {
+    addedBy: string;
+    addedAt: string;
+}
 
 export default function SessionPage({ params }: { params: { id: string } }) {
     const { data: session } = useSession()
     const [isLoading, setIsLoading] = useState(true)
     const [currentTrack, setCurrentTrack] = useState<SpotifyTrack | null>(null)
     const [isPlaying, setIsPlaying] = useState(false)
+    const [progress, setProgress] = useState(0)
+    const [queue, setQueue] = useState<QueueItem[]>([])
     const { toast } = useToast()
 
+    // 再生状態の取得
     useEffect(() => {
         if (!session?.accessToken) return
 
@@ -33,14 +43,10 @@ export default function SessionPage({ params }: { params: { id: string } }) {
                         albumArt: playback.item.album.images[0]?.url
                     })
                     setIsPlaying(playback.is_playing)
+                    setProgress(playback.progress_ms || 0)
                 }
             } catch (error) {
                 console.error('Failed to fetch playback:', error)
-                toast({
-                    title: "エラー",
-                    description: "再生情報の取得に失敗しました",
-                    variant: "destructive",
-                })
             } finally {
                 setIsLoading(false)
             }
@@ -48,15 +54,15 @@ export default function SessionPage({ params }: { params: { id: string } }) {
 
         const interval = setInterval(fetchCurrentPlayback, 1000)
         return () => clearInterval(interval)
-    }, [session?.accessToken, toast])
+    }, [session?.accessToken])
 
+    // 再生コントロール関数
     const handlePlayPause = async () => {
         if (!session?.accessToken) return
         try {
             await controlPlayback(session.accessToken, isPlaying ? 'pause' : 'play')
             setIsPlaying(!isPlaying)
         } catch (error) {
-            console.error('Failed to control playback:', error)
             toast({
                 title: "エラー",
                 description: "再生制御に失敗しました",
@@ -70,7 +76,6 @@ export default function SessionPage({ params }: { params: { id: string } }) {
         try {
             await controlPlayback(session.accessToken, direction)
         } catch (error) {
-            console.error(`Failed to skip ${direction}:`, error)
             toast({
                 title: "エラー",
                 description: `${direction === 'next' ? '次の曲' : '前の曲'}へのスキップに失敗しました`,
@@ -79,67 +84,166 @@ export default function SessionPage({ params }: { params: { id: string } }) {
         }
     }
 
+    // キュー操作関数
+    const handleRemoveFromQueue = (index: number) => {
+        setQueue(prev => prev.filter((_, i) => i !== index))
+    }
+
+    const handleMoveInQueue = (index: number, direction: 'up' | 'down') => {
+        if (direction === 'up' && index > 0) {
+            setQueue(prev => {
+                const newQueue = [...prev]
+                const temp = newQueue[index]
+                newQueue[index] = newQueue[index - 1]
+                newQueue[index - 1] = temp
+                return newQueue
+            })
+        } else if (direction === 'down' && index < queue.length - 1) {
+            setQueue(prev => {
+                const newQueue = [...prev]
+                const temp = newQueue[index]
+                newQueue[index] = newQueue[index + 1]
+                newQueue[index + 1] = temp
+                return newQueue
+            })
+        }
+    }
+
+    // 時間のフォーマット関数
+    const formatTime = (ms: number) => {
+        const seconds = Math.floor(ms / 1000)
+        const minutes = Math.floor(seconds / 60)
+        const remainingSeconds = seconds % 60
+        return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
+    }
+
     if (isLoading) {
-        return (
-            <div className="container mx-auto px-4 py-8">
-                <div className="max-w-2xl mx-auto">
-                    <Card>
-                        <CardContent className="p-6">
-                            <div className="text-center">読み込み中...</div>
-                        </CardContent>
-                    </Card>
-                </div>
-            </div>
-        )
+        return <div className="flex items-center justify-center h-screen">読み込み中...</div>
     }
 
     return (
-        <div className="container mx-auto px-4 py-8">
-            <div className="max-w-2xl mx-auto space-y-6">
-                <Card>
-                    <CardHeader>
-                        <CardTitle>セッション: {params.id}</CardTitle>
-                        <CardDescription>
-                            {currentTrack ? '現在再生中の曲' : '再生中の曲はありません'}
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        {currentTrack && (
-                            <div className="space-y-4">
-                                <div className="text-center space-y-2">
-                                    <h3 className="text-xl font-bold">{currentTrack.name}</h3>
-                                    <p className="text-muted-foreground">
-                                        {currentTrack.artist} - {currentTrack.album}
-                                    </p>
-                                </div>
-                                <div className="flex justify-center items-center gap-4">
-                                    <Button
-                                        variant="outline"
-                                        size="icon"
-                                        onClick={() => handleSkip('previous')}
-                                    >
-                                        <FaStepBackward />
-                                    </Button>
-                                    <Button
-                                        variant="default"
-                                        size="icon"
-                                        onClick={handlePlayPause}
-                                    >
-                                        {isPlaying ? <FaPause /> : <FaPlay />}
-                                    </Button>
-                                    <Button
-                                        variant="outline"
-                                        size="icon"
-                                        onClick={() => handleSkip('next')}
-                                    >
-                                        <FaStepForward />
-                                    </Button>
+        <div className="pb-16"> {/* NavigationBarの高さ分のパディング */}
+            {/* 現在再生中の曲 */}
+            <div className="fixed top-0 left-0 right-0 bg-background border-b">
+                <div className="max-w-lg mx-auto p-4">
+                    {currentTrack && (
+                        <div className="space-y-4">
+                            {/* アルバムアート */}
+                            <div className="relative w-48 h-48 mx-auto">
+                                {currentTrack.albumArt && (
+                                    <Image
+                                        src={currentTrack.albumArt}
+                                        alt={currentTrack.album}
+                                        fill
+                                        className="object-cover rounded-lg"
+                                    />
+                                )}
+                            </div>
+                            {/* 曲情報 */}
+                            <div className="text-center space-y-1">
+                                <h3 className="font-bold">{currentTrack.name}</h3>
+                                <p className="text-sm text-muted-foreground">
+                                    {currentTrack.artist} - {currentTrack.album}
+                                </p>
+                            </div>
+                            {/* シークバー */}
+                            <div className="space-y-2">
+                                <Slider
+                                    value={[progress]}
+                                    max={currentTrack.duration}
+                                    step={1000}
+                                    className="w-full"
+                                />
+                                <div className="flex justify-between text-sm text-muted-foreground">
+                                    <span>{formatTime(progress)}</span>
+                                    <span>{formatTime(currentTrack.duration)}</span>
                                 </div>
                             </div>
-                        )}
-                    </CardContent>
-                </Card>
+                            {/* コントロール */}
+                            <div className="flex justify-center items-center gap-4">
+                                <Button
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={() => handleSkip('previous')}
+                                >
+                                    <FaStepBackward />
+                                </Button>
+                                <Button
+                                    variant="default"
+                                    size="icon"
+                                    onClick={handlePlayPause}
+                                >
+                                    {isPlaying ? <FaPause /> : <FaPlay />}
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={() => handleSkip('next')}
+                                >
+                                    <FaStepForward />
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+                </div>
             </div>
+
+            {/* キュー */}
+            <div className="mt-[440px] max-w-lg mx-auto p-4"> {/* 現在再生中の曲の高さ分のマージン */}
+                <h2 className="text-lg font-semibold mb-4">次に再生</h2>
+                <div className="space-y-2">
+                    {queue.map((track, index) => (
+                        <div
+                            key={`${track.id}-${index}`}
+                            className="flex items-center gap-3 p-2 rounded-lg border"
+                        >
+                            {track.albumArt && (
+                                <Image
+                                    src={track.albumArt}
+                                    alt={track.album}
+                                    width={48}
+                                    height={48}
+                                    className="rounded"
+                                />
+                            )}
+                            <div className="flex-1 min-w-0">
+                                <p className="font-medium truncate">{track.name}</p>
+                                <p className="text-sm text-muted-foreground truncate">
+                                    {track.artist}
+                                </p>
+                            </div>
+                            <div className="flex items-center gap-1">
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handleMoveInQueue(index, 'up')}
+                                    disabled={index === 0}
+                                >
+                                    <FaArrowUp className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handleMoveInQueue(index, 'down')}
+                                    disabled={index === queue.length - 1}
+                                >
+                                    <FaArrowDown className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handleRemoveFromQueue(index)}
+                                >
+                                    <FaTrash className="h-4 w-4" />
+                                </Button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* ナビゲーションバー */}
+            <NavigationBar />
         </div>
     )
 }
