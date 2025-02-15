@@ -1,53 +1,59 @@
-import { NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth/next'
-import { randomBytes } from 'crypto'
+import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { randomBytes } from 'crypto';
+import dbConnect from '@/lib/mongodb';
+import { Session } from '@/models/Session';
 
-// セッションIDを生成する関数
 function generateSessionId(): string {
-    // 3バイトのランダムな値を生成し、base64エンコード
     return randomBytes(3)
         .toString('base64')
-        .replace(/[+/]/g, '') // URL安全な文字に置換
-        .slice(0, 6) // 6文字に制限
+        .replace(/[+/]/g, '')
+        .slice(0, 6);
 }
 
 export async function POST() {
     try {
-        // ユーザーのセッションを取得
-        const session = await getServerSession()
+        const session = await getServerSession();
 
-        if (!session) {
+        if (!session?.user?.email) {
             return NextResponse.json(
                 { error: 'Authentication required' },
                 { status: 401 }
-            )
+            );
         }
+
+        // データベースに接続
+        await dbConnect();
 
         // セッションIDを生成
-        const sessionId = generateSessionId()
+        const sessionId = generateSessionId();
 
-        // TODO: セッション情報をデータベースに保存
-        // 現在はメモリ内で管理（実際の実装ではデータベースを使用する）
-        const sessionData = {
-            id: sessionId,
-            hostId: session.user?.email,
-            createdAt: new Date().toISOString(),
-            participants: [],
-            currentTrack: null,
-            queue: []
-        }
+        // 有効期限を24時間後に設定
+        const expiresAt = new Date();
+        expiresAt.setHours(expiresAt.getHours() + 24);
 
-        // セッション情報を返す
-        return NextResponse.json({
+        // セッションをデータベースに保存
+        const newSession = await Session.create({
             sessionId,
+            hostId: session.user.email,
+            expiresAt,
+            participants: [{
+                id: session.user.email,
+                name: session.user.name || 'Host',
+                role: 'host'
+            }]
+        });
+
+        return NextResponse.json({
+            sessionId: newSession.sessionId,
             message: 'Session created successfully'
-        })
+        });
 
     } catch (error) {
-        console.error('Failed to create session:', error)
+        console.error('Failed to create session:', error);
         return NextResponse.json(
             { error: 'Failed to create session' },
             { status: 500 }
-        )
+        );
     }
 }

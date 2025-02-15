@@ -25,7 +25,7 @@ export interface CurrentTrack {
     position: number;
 }
 
-export interface SessionDocument extends Document {
+export interface MusicSession extends Document {
     sessionId: string;
     hostId: string;
     createdAt: Date;

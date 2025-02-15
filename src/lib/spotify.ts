@@ -1,16 +1,22 @@
-const SPOTIFY_API_BASE = 'https://api.spotify.com/v1'
+import { SpotifyTrack } from "@/types/spotify";
+
+const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
 
 interface SpotifyError extends Error {
     status?: number;
 }
 
-export async function getCurrentPlayback(accessToken: string) {
+export async function getCurrentPlayback(accessToken: string | undefined) {
+    if (!accessToken) {
+        throw new Error('Access token is required');
+    }
+
     try {
         const response = await fetch(`${SPOTIFY_API_BASE}/me/player`, {
             headers: {
                 Authorization: `Bearer ${accessToken}`,
             },
-        })
+        });
 
         if (!response.ok) {
             const error = new Error('Failed to get current playback') as SpotifyError;
@@ -18,7 +24,7 @@ export async function getCurrentPlayback(accessToken: string) {
             throw error;
         }
 
-        return response.json()
+        return response.json();
     } catch (error) {
         console.error('Error getting current playback:', error);
         throw error;
@@ -26,9 +32,13 @@ export async function getCurrentPlayback(accessToken: string) {
 }
 
 export async function controlPlayback(
-    accessToken: string,
+    accessToken: string | undefined,
     action: 'play' | 'pause' | 'next' | 'previous'
 ) {
+    if (!accessToken) {
+        throw new Error('Access token is required');
+    }
+
     try {
         const endpoint = action === 'next' ? 'next' :
             action === 'previous' ? 'previous' :
@@ -55,10 +65,19 @@ export async function controlPlayback(
     }
 }
 
-export async function searchTracks(accessToken: string, query: string) {
+export async function searchTracks(
+    accessToken: string | undefined,
+    query: string,
+    offset: number = 0,
+    limit: number = 20
+) {
+    if (!accessToken) {
+        throw new Error('Access token is required');
+    }
+
     try {
         const response = await fetch(
-            `${SPOTIFY_API_BASE}/search?q=${encodeURIComponent(query)}&type=track&limit=10`,
+            `${SPOTIFY_API_BASE}/search?q=${encodeURIComponent(query)}&type=track&limit=${limit}&offset=${offset}`,
             {
                 headers: {
                     Authorization: `Bearer ${accessToken}`,
@@ -79,7 +98,14 @@ export async function searchTracks(accessToken: string, query: string) {
     }
 }
 
-export async function addToQueue(accessToken: string, trackUri: string) {
+export async function addToQueue(
+    accessToken: string | undefined,
+    trackUri: string
+) {
+    if (!accessToken) {
+        throw new Error('Access token is required');
+    }
+
     try {
         const response = await fetch(
             `${SPOTIFY_API_BASE}/me/player/queue?uri=${encodeURIComponent(trackUri)}`,
@@ -102,7 +128,50 @@ export async function addToQueue(accessToken: string, trackUri: string) {
     }
 }
 
-// セッション更新のためのトークンリフレッシュ関数
+export async function addTrackToSession(
+    accessToken: string | undefined,
+    sessionId: string,
+    track: SpotifyTrack
+) {
+    if (!accessToken) {
+        throw new Error('Access token is required');
+    }
+
+    try {
+        // 1. Spotifyのキューに追加
+        await addToQueue(accessToken, track.uri);
+
+        // 2. セッションのキューに追加
+        const sessionData = {
+            trackId: track.id,
+            trackName: track.name,
+            artistName: track.artists[0].name,
+            albumName: track.album.name,
+            albumArt: track.album.images[0]?.url,
+            uri: track.uri,
+            addedAt: new Date().toISOString(),
+        };
+
+        const response = await fetch(`/api/session/${sessionId}/queue`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(sessionData),
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to update session queue');
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error('Error adding track to session:', error);
+        throw error;
+    }
+}
+
+// アクセストークンのリフレッシュ関数
 export async function refreshAccessToken(refreshToken: string) {
     try {
         const basic = Buffer.from(
