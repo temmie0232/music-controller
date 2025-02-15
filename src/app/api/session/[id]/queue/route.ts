@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth/next';
+import { getServerSession } from 'next-auth';
+import dbConnect from '@/lib/mongodb';
+import { Session } from '@/models/Session';
+import type { QueueItem, SessionDocument } from '@/types/session';
 
 export async function POST(
     request: Request,
@@ -7,28 +10,40 @@ export async function POST(
 ) {
     try {
         const session = await getServerSession();
-
-        if (!session) {
+        if (!session?.user) {
             return NextResponse.json(
                 { error: 'Authentication required' },
                 { status: 401 }
             );
         }
 
+        await dbConnect();
         const sessionId = params.id;
         const body = await request.json();
 
-        // TODO: データベースにキュー情報を保存
-        // 現在はメモリ内で管理（実際の実装ではデータベースを使用する）
-        console.log('Adding track to queue:', {
-            sessionId,
-            trackInfo: body
-        });
+        const musicSession = await Session.findOne({ sessionId }) as SessionDocument | null;
+        if (!musicSession) {
+            return NextResponse.json(
+                { error: 'Session not found' },
+                { status: 404 }
+            );
+        }
+
+        const queueItem: QueueItem = {
+            ...body,
+            addedBy: session.user.email || '',
+            addedAt: new Date(),
+            position: musicSession.queue.length
+        };
+
+        musicSession.queue.push(queueItem);
+        await musicSession.save();
 
         return NextResponse.json(
             { message: 'Track added to queue successfully' },
             { status: 200 }
         );
+
     } catch (error) {
         console.error('Failed to add track to queue:', error);
         return NextResponse.json(
@@ -44,22 +59,28 @@ export async function GET(
 ) {
     try {
         const session = await getServerSession();
-
-        if (!session) {
+        if (!session?.user) {
             return NextResponse.json(
                 { error: 'Authentication required' },
                 { status: 401 }
             );
         }
 
+        await dbConnect();
         const sessionId = params.id;
 
-        // TODO: データベースからキュー情報を取得
-        // 現在はメモリ内で管理（実際の実装ではデータベースを使用する）
+        const musicSession = await Session.findOne({ sessionId }) as SessionDocument | null;
+        if (!musicSession) {
+            return NextResponse.json(
+                { error: 'Session not found' },
+                { status: 404 }
+            );
+        }
 
         return NextResponse.json({
-            queue: [], // 実際の実装ではデータベースから取得したキュー情報を返す
+            queue: musicSession.queue
         });
+
     } catch (error) {
         console.error('Failed to get queue:', error);
         return NextResponse.json(
@@ -75,28 +96,33 @@ export async function DELETE(
 ) {
     try {
         const session = await getServerSession();
-
-        if (!session) {
+        if (!session?.user) {
             return NextResponse.json(
                 { error: 'Authentication required' },
                 { status: 401 }
             );
         }
 
+        await dbConnect();
         const sessionId = params.id;
         const { trackId } = await request.json();
 
-        // TODO: データベースからキュー情報を削除
-        // 現在はメモリ内で管理（実際の実装ではデータベースを使用する）
-        console.log('Removing track from queue:', {
-            sessionId,
-            trackId
-        });
+        const musicSession = await Session.findOne({ sessionId }) as SessionDocument | null;
+        if (!musicSession) {
+            return NextResponse.json(
+                { error: 'Session not found' },
+                { status: 404 }
+            );
+        }
+
+        musicSession.queue = musicSession.queue.filter((item: QueueItem) => item.trackId !== trackId);
+        await musicSession.save();
 
         return NextResponse.json(
             { message: 'Track removed from queue successfully' },
             { status: 200 }
         );
+
     } catch (error) {
         console.error('Failed to remove track from queue:', error);
         return NextResponse.json(
@@ -112,29 +138,44 @@ export async function PATCH(
 ) {
     try {
         const session = await getServerSession();
-
-        if (!session) {
+        if (!session?.user) {
             return NextResponse.json(
                 { error: 'Authentication required' },
                 { status: 401 }
             );
         }
 
+        await dbConnect();
         const sessionId = params.id;
         const { trackId, newPosition } = await request.json();
 
-        // TODO: データベース内のキューの順序を更新
-        // 現在はメモリ内で管理（実際の実装ではデータベースを使用する）
-        console.log('Updating track position in queue:', {
-            sessionId,
-            trackId,
-            newPosition
-        });
+        const musicSession = await Session.findOne({ sessionId }) as SessionDocument | null;
+        if (!musicSession) {
+            return NextResponse.json(
+                { error: 'Session not found' },
+                { status: 404 }
+            );
+        }
+
+        const track = musicSession.queue.find((item: QueueItem) => item.trackId === trackId);
+        if (!track) {
+            return NextResponse.json(
+                { error: 'Track not found in queue' },
+                { status: 404 }
+            );
+        }
+
+        const oldPosition = musicSession.queue.indexOf(track);
+        musicSession.queue.splice(oldPosition, 1);
+        musicSession.queue.splice(newPosition, 0, track);
+
+        await musicSession.save();
 
         return NextResponse.json(
             { message: 'Queue order updated successfully' },
             { status: 200 }
         );
+
     } catch (error) {
         console.error('Failed to update queue order:', error);
         return NextResponse.json(

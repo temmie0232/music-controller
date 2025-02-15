@@ -4,26 +4,53 @@ import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { useToast } from "@/hooks/use-toast"
 import { useSession } from "next-auth/react"
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import { FaPlay, FaPause, FaStepForward, FaStepBackward, FaArrowUp, FaArrowDown, FaTrash } from "react-icons/fa"
 import { getCurrentPlayback, controlPlayback } from "@/lib/spotify"
-import type { SpotifyTrack } from "@/types/session"
+import { getSessionQueue, removeFromQueue, reorderQueue } from "@/lib/queue-handler"
+import type { QueueItem } from "@/types/session"
+import type { SpotifyTrack } from "@/types/spotify"
 import { NavigationBar } from "@/components/navigation-bar"
+import { cn } from "@/lib/utils"
 import Image from "next/image"
 
-interface QueueItem extends SpotifyTrack {
-    addedBy: string;
-    addedAt: string;
+interface CurrentTrackState {
+    id: string;
+    name: string;
+    artist: string;
+    album: string;
+    duration: number;
+    uri: string;
+    albumArt?: string;
 }
 
 export default function SessionPage({ params }: { params: { id: string } }) {
     const { data: session } = useSession()
     const [isLoading, setIsLoading] = useState(true)
-    const [currentTrack, setCurrentTrack] = useState<SpotifyTrack | null>(null)
+    const [currentTrack, setCurrentTrack] = useState<CurrentTrackState | null>(null)
     const [isPlaying, setIsPlaying] = useState(false)
     const [progress, setProgress] = useState(0)
     const [queue, setQueue] = useState<QueueItem[]>([])
+    const [nowPlayingId, setNowPlayingId] = useState<string | null>(null)
+    const previousTrackIdRef = useRef<string | null>(null)
     const { toast } = useToast()
+
+    // キューをソートする関数
+    const sortedQueue = () => {
+        return [...queue].sort((a, b) => {
+            if (a.trackId === nowPlayingId) return -1;
+            if (b.trackId === nowPlayingId) return 1;
+            return 0;
+        });
+    };
+
+    // 次に再生される曲かどうかを判定する関数
+    const isNextToPlay = (trackId: string) => {
+        const sortedTracks = sortedQueue();
+        const trackIndex = sortedTracks.findIndex(t => t.trackId === trackId);
+        // 再生中の曲がない場合は最上部の曲、ある場合は2番目の曲が次に再生される
+        return nowPlayingId ? trackIndex === 1 : trackIndex === 0;
+    };
 
     // 再生状態の取得
     useEffect(() => {
@@ -31,7 +58,7 @@ export default function SessionPage({ params }: { params: { id: string } }) {
 
         const fetchCurrentPlayback = async () => {
             try {
-                const playback = await getCurrentPlayback(session.accessToken!)
+                const playback = await getCurrentPlayback(session.accessToken)
                 if (playback && playback.item) {
                     setCurrentTrack({
                         id: playback.item.id,
@@ -44,9 +71,24 @@ export default function SessionPage({ params }: { params: { id: string } }) {
                     })
                     setIsPlaying(playback.is_playing)
                     setProgress(playback.progress_ms || 0)
+                    setNowPlayingId(playback.item.id)
+
+                    // 曲が変わったことを検知して、前の曲をキューから削除
+                    if (previousTrackIdRef.current && previousTrackIdRef.current !== playback.item.id) {
+                        const prevTrack = queue.find(track => track.trackId === previousTrackIdRef.current);
+                        if (prevTrack) {
+                            handleRemoveFromQueue(prevTrack.trackId);
+                        }
+                    }
+                    previousTrackIdRef.current = playback.item.id;
                 }
             } catch (error) {
                 console.error('Failed to fetch playback:', error)
+                toast({
+                    title: "エラー",
+                    description: "再生状態の取得に失敗しました",
+                    variant: "destructive"
+                })
             } finally {
                 setIsLoading(false)
             }
@@ -54,7 +96,29 @@ export default function SessionPage({ params }: { params: { id: string } }) {
 
         const interval = setInterval(fetchCurrentPlayback, 1000)
         return () => clearInterval(interval)
-    }, [session?.accessToken])
+    }, [session?.accessToken, toast, queue])
+
+    // キューの取得
+    useEffect(() => {
+        if (!session?.accessToken) return
+
+        const fetchQueue = async () => {
+            try {
+                const data = await getSessionQueue(params.id)
+                setQueue(data.queue)
+            } catch (error) {
+                console.error('Failed to fetch queue:', error)
+                toast({
+                    title: "エラー",
+                    description: "キューの取得に失敗しました",
+                    variant: "destructive"
+                })
+            }
+        }
+
+        fetchQueue()
+        // WebSocketなどでリアルタイム更新を実装する場合はここに追加
+    }, [session?.accessToken, params.id, toast])
 
     // 再生コントロール関数
     const handlePlayPause = async () => {
@@ -85,26 +149,48 @@ export default function SessionPage({ params }: { params: { id: string } }) {
     }
 
     // キュー操作関数
-    const handleRemoveFromQueue = (index: number) => {
-        setQueue(prev => prev.filter((_, i) => i !== index))
+    const handleRemoveFromQueue = async (trackId: string) => {
+        try {
+            await removeFromQueue(params.id, trackId)
+            setQueue(prev => prev.filter(item => item.trackId !== trackId))
+            toast({
+                title: "削除しました",
+                description: "曲をキューから削除しました",
+            })
+        } catch (error) {
+            toast({
+                title: "エラー",
+                description: "キューからの削除に失敗しました",
+                variant: "destructive"
+            })
+        }
     }
 
-    const handleMoveInQueue = (index: number, direction: 'up' | 'down') => {
-        if (direction === 'up' && index > 0) {
+    const handleMoveInQueue = async (trackId: string, direction: 'up' | 'down') => {
+        const currentIndex = queue.findIndex(item => item.trackId === trackId)
+        if (
+            (direction === 'up' && currentIndex <= 0) ||
+            (direction === 'down' && currentIndex >= queue.length - 1)
+        ) {
+            return
+        }
+
+        const newPosition = direction === 'up' ? currentIndex - 1 : currentIndex + 1
+
+        try {
+            await reorderQueue(params.id, trackId, newPosition)
             setQueue(prev => {
                 const newQueue = [...prev]
-                const temp = newQueue[index]
-                newQueue[index] = newQueue[index - 1]
-                newQueue[index - 1] = temp
+                const item = newQueue[currentIndex]
+                newQueue.splice(currentIndex, 1)
+                newQueue.splice(newPosition, 0, item)
                 return newQueue
             })
-        } else if (direction === 'down' && index < queue.length - 1) {
-            setQueue(prev => {
-                const newQueue = [...prev]
-                const temp = newQueue[index]
-                newQueue[index] = newQueue[index + 1]
-                newQueue[index + 1] = temp
-                return newQueue
+        } catch (error) {
+            toast({
+                title: "エラー",
+                description: "キューの並び替えに失敗しました",
+                variant: "destructive"
             })
         }
     }
@@ -122,9 +208,9 @@ export default function SessionPage({ params }: { params: { id: string } }) {
     }
 
     return (
-        <div className="pb-16"> {/* NavigationBarの高さ分のパディング */}
+        <div className="pb-16">
             {/* 現在再生中の曲 */}
-            <div className="fixed top-0 left-0 right-0 bg-background border-b">
+            <div className="fixed top-0 left-0 right-0 bg-background border-b z-20">
                 <div className="max-w-lg mx-auto p-4">
                     {currentTrack && (
                         <div className="space-y-4">
@@ -189,50 +275,60 @@ export default function SessionPage({ params }: { params: { id: string } }) {
             </div>
 
             {/* キュー */}
-            <div className="mt-[440px] max-w-lg mx-auto p-4"> {/* 現在再生中の曲の高さ分のマージン */}
+            <div className="mt-[440px] max-w-lg mx-auto p-4">
                 <h2 className="text-lg font-semibold mb-4">次に再生</h2>
                 <div className="space-y-2">
-                    {queue.map((track, index) => (
+                    {sortedQueue().map((track) => (
                         <div
-                            key={`${track.id}-${index}`}
-                            className="flex items-center gap-3 p-2 rounded-lg border"
+                            key={`${track.trackId}-${track.uri}`}
+                            className={cn(
+                                "flex items-center gap-3 p-2 rounded-lg border transition-colors relative",
+                                track.trackId === nowPlayingId && "border-green-500 bg-green-50 dark:bg-green-950"
+                            )}
                         >
                             {track.albumArt && (
                                 <Image
                                     src={track.albumArt}
-                                    alt={track.album}
+                                    alt={track.albumName}
                                     width={48}
                                     height={48}
                                     className="rounded"
                                 />
                             )}
                             <div className="flex-1 min-w-0">
-                                <p className="font-medium truncate">{track.name}</p>
+                                <p className="font-medium truncate">{track.trackName}</p>
                                 <p className="text-sm text-muted-foreground truncate">
-                                    {track.artist}
+                                    {track.artistName}
                                 </p>
                             </div>
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-1 relative z-10">
                                 <Button
                                     variant="ghost"
                                     size="icon"
-                                    onClick={() => handleMoveInQueue(index, 'up')}
-                                    disabled={index === 0}
+                                    onClick={() => handleMoveInQueue(track.trackId, 'up')}
+                                    disabled={track.trackId === nowPlayingId ||
+                                        isNextToPlay(track.trackId) ||
+                                        queue.indexOf(track) === 0}
+                                    className="bg-background"
                                 >
                                     <FaArrowUp className="h-4 w-4" />
                                 </Button>
                                 <Button
                                     variant="ghost"
                                     size="icon"
-                                    onClick={() => handleMoveInQueue(index, 'down')}
-                                    disabled={index === queue.length - 1}
+                                    onClick={() => handleMoveInQueue(track.trackId, 'down')}
+                                    disabled={track.trackId === nowPlayingId ||
+                                        queue.indexOf(track) === queue.length - 1}
+                                    className="bg-background"
                                 >
                                     <FaArrowDown className="h-4 w-4" />
                                 </Button>
                                 <Button
                                     variant="ghost"
                                     size="icon"
-                                    onClick={() => handleRemoveFromQueue(index)}
+                                    onClick={() => handleRemoveFromQueue(track.trackId)}
+                                    disabled={track.trackId === nowPlayingId}
+                                    className="bg-background"
                                 >
                                     <FaTrash className="h-4 w-4" />
                                 </Button>
@@ -242,7 +338,6 @@ export default function SessionPage({ params }: { params: { id: string } }) {
                 </div>
             </div>
 
-            {/* ナビゲーションバー */}
             <NavigationBar />
         </div>
     )

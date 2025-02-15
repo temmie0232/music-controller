@@ -1,8 +1,13 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   images: {
-    domains: ['i.scdn.co'], // Spotifyの画像ドメインを許可
-  },
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'i.scdn.co'
+      }
+    ]
+  }
 }
 
 module.exports = nextConfig

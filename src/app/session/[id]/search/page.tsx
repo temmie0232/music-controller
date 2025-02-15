@@ -5,7 +5,8 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { useSession } from "next-auth/react"
 import { useState } from "react"
-import { searchTracks, addTrackToSession } from "@/lib/spotify"
+import { searchTracks } from "@/lib/spotify"
+import { addTrackToQueue } from "@/lib/queue-handler"
 import { useToast } from "@/hooks/use-toast"
 import { Search, Plus, Loader2 } from "lucide-react"
 import Image from "next/image"
@@ -29,6 +30,7 @@ export default function SearchPage() {
     })
     const [isSearching, setIsSearching] = useState(false)
     const [isLoadingMore, setIsLoadingMore] = useState(false)
+    const [addingTrack, setAddingTrack] = useState<string | null>(null)
     const { data: session } = useSession()
     const { toast } = useToast()
     const pathname = usePathname()
@@ -68,10 +70,18 @@ export default function SearchPage() {
     }
 
     const handleAddToQueue = async (track: SpotifyTrack) => {
-        if (!session?.accessToken) return
+        if (!session?.accessToken) {
+            toast({
+                title: "エラー",
+                description: "ログインが必要です",
+                variant: "destructive"
+            })
+            return
+        }
 
+        setAddingTrack(track.id)
         try {
-            await addTrackToSession(session.accessToken, sessionId, track)
+            await addTrackToQueue(session.accessToken, sessionId, track)
             toast({
                 title: "追加しました",
                 description: `${track.name}をキューに追加しました`,
@@ -83,6 +93,8 @@ export default function SearchPage() {
                 description: "キューへの追加に失敗しました",
                 variant: "destructive"
             })
+        } finally {
+            setAddingTrack(null)
         }
     }
 
@@ -149,8 +161,13 @@ export default function SearchPage() {
                                             variant="ghost"
                                             size="icon"
                                             onClick={() => handleAddToQueue(track)}
+                                            disabled={addingTrack === track.id}
                                         >
-                                            <Plus className="h-4 w-4" />
+                                            {addingTrack === track.id ? (
+                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                            ) : (
+                                                <Plus className="h-4 w-4" />
+                                            )}
                                         </Button>
                                     </div>
                                 ))}
