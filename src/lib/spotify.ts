@@ -1,3 +1,5 @@
+import { SpotifyTrack } from "@/types/spotify";
+
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1'
 
 interface SpotifyError extends Error {
@@ -98,6 +100,44 @@ export async function addToQueue(accessToken: string, trackUri: string) {
         }
     } catch (error) {
         console.error('Error adding track to queue:', error);
+        throw error;
+    }
+}
+
+export async function addTrackToSession(
+    accessToken: string,
+    sessionId: string,
+    track: SpotifyTrack
+) {
+    try {
+        // 1. Spotifyのキューに追加
+        await addToQueue(accessToken, track.uri);
+
+        // 2. セッションのキューに追加（実際のアプリではここでデータベースに保存）
+        const sessionData = {
+            trackId: track.id,
+            trackName: track.name,
+            artistName: track.artists[0].name,
+            albumName: track.album.name,
+            addedAt: new Date().toISOString(),
+        };
+
+        // 3. セッション情報を更新（実際のアプリではAPI経由で更新）
+        const response = await fetch(`/api/session/${sessionId}/queue`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(sessionData),
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to update session queue');
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error('Error adding track to session:', error);
         throw error;
     }
 }

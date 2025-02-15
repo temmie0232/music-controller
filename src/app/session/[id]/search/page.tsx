@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { useSession } from "next-auth/react"
 import { useState } from "react"
-import { searchTracks, addToQueue } from "@/lib/spotify"
+import { searchTracks, addTrackToSession } from "@/lib/spotify"
 import { useToast } from "@/hooks/use-toast"
 import { Search, Plus, Loader2 } from "lucide-react"
 import Image from "next/image"
@@ -71,7 +71,7 @@ export default function SearchPage() {
         if (!session?.accessToken) return
 
         try {
-            await addToQueue(session.accessToken, track.uri)
+            await addTrackToSession(session.accessToken, sessionId, track)
             toast({
                 title: "追加しました",
                 description: `${track.name}をキューに追加しました`,
